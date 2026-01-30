@@ -1,0 +1,8 @@
+{
+  "name": "R-ATC",
+  "description": "An AI-powered Air Traffic Controller for flight simulators using Gemini Vision and Speech API.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ]
+}
