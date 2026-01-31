@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Debug and verification artifacts
+verification_status.txt
+verify_*.json
+verify_*.log
+vision_log.txt
+all_models.txt
+*_error.log

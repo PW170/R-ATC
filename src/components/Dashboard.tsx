@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { LogMessage, ConnectionState } from '../types';
-import VideoFeed from './VideoFeed';
+import VideoFeed, { VideoFeedHandle } from './VideoFeed';
 import LogTerminal from './LogTerminal';
 import TelemetryCard from './TelemetryCard';
-import { analyzeFlightFrame } from '../services/openRouterService';
+import { analyzeFlightFrame } from '../services/aiService';
 import { speakText, SpeechRecognizer } from '../services/speechService';
 import { saveLog } from '../services/logService';
 import { User } from '@supabase/supabase-js';
@@ -23,11 +23,12 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
     const [pilotContext, setPilotContext] = useState<string>('');
     const [isProcessing, setIsProcessing] = useState(false);
     const [telemetry, setTelemetry] = useState({ alt: '---', spd: '---' });
+    const [atcStage, setAtcStage] = useState<'IDLE' | 'AWAITING_AIRCRAFT' | 'AWAITING_DESTINATION'>('IDLE');
+    const [interimText, setInterimText] = useState('');
 
     // User Config State
     const [callsign, setCallsign] = useState<string>(localStorage.getItem('ratc_callsign') || user.email?.split('@')[0] || 'Unknown');
-    // Use env var or empty string - Note: We assume key is in env if not provided
-    const apiKey = import.meta.env.VITE_OPENROUTER_API_KEY || '';
+    const [apiKey, setApiKey] = useState<string>(localStorage.getItem('ratc_api_key') || import.meta.env.VITE_AI_API_KEY || '');
     const [showSettings, setShowSettings] = useState(false);
 
     // Session ID
@@ -35,6 +36,15 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
 
     // Refs
     const recognizerRef = useRef<SpeechRecognizer | null>(null);
+    const videoFeedRef = useRef<VideoFeedHandle>(null);
+    const isProcessingRef = useRef(false);
+    const pilotContextRef = useRef('');
+    const atcStageRef = useRef<'IDLE' | 'AWAITING_AIRCRAFT' | 'AWAITING_DESTINATION'>('IDLE');
+
+    // Sync ref with state
+    useEffect(() => {
+        atcStageRef.current = atcStage;
+    }, [atcStage]);
 
     // Initial Config Check - Only check callsign now
     useEffect(() => {
@@ -47,6 +57,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
     const handleSaveConfig = () => {
         if (callsign) {
             localStorage.setItem('ratc_callsign', callsign);
+            localStorage.setItem('ratc_api_key', apiKey);
             setShowSettings(false);
         }
     };
@@ -65,18 +76,106 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
 
     // Initialize Speech Recognition
     useEffect(() => {
-        recognizerRef.current = new SpeechRecognizer((transcript) => {
-            // WAKE WORD LOGIC
-            const cleanTranscript = transcript.trim();
-            const isWakeWord = cleanTranscript.toLowerCase().startsWith('atc') || cleanTranscript.toLowerCase().startsWith('alpha tango charlie');
+        recognizerRef.current = new SpeechRecognizer(
+            (transcript, isFinal) => {
+                const cleanTranscript = transcript.trim();
+                const cleanLower = cleanTranscript.toLowerCase();
 
-            if (isWakeWord) {
-                addLog('PILOT', cleanTranscript);
-                setPilotContext(cleanTranscript);
-            } else {
-                console.log("Ignored (No Wake Word):", cleanTranscript);
+                // Handle Interim (Visual Feedback only)
+                if (!isFinal) {
+                    setInterimText(cleanTranscript);
+                    return;
+                }
+
+                // Final Result - Clear interim and process
+                setInterimText('');
+
+                // STAGE 1: IDLE - Listening for Wake Word
+                if (atcStageRef.current === 'IDLE') {
+                    let isWakeWord = false;
+                    let payload = '';
+
+                    if (cleanLower.startsWith('atc')) {
+                        isWakeWord = true;
+                        payload = cleanTranscript.substring(3).trim();
+                    } else if (cleanLower.startsWith('alpha tango charlie')) {
+                        isWakeWord = true;
+                        payload = cleanTranscript.substring(19).trim();
+                    }
+
+                    if (isWakeWord) {
+                        addLog('PILOT', cleanTranscript);
+
+                        if (payload.length > 2) {
+                            // FAST TRACK: Pilot provided aircraft in the same breath
+                            // e.g. "ATC, this is Boeing 737"
+                            pilotContextRef.current = payload;
+                            setPilotContext(payload);
+
+                            // Trigger Analysis immediately
+                            videoFeedRef.current?.captureNow();
+
+                            // Skip strict identification state, move to destination
+                            // (handleFrameCapture will transition to AWAITING_DESTINATION)
+                            setAtcStage('AWAITING_AIRCRAFT'); // Temporarily set to this so handleFrameCapture knows what to do
+                            // Actually, better to just let handleFrameCapture handle the transition effectively.
+                            // But handleFrameCapture uses the CURRENT ref.
+                            // We should set it to AWAITING_AIRCRAFT so the post-analysis moves to AWAITING_DESTINATION.
+                            atcStageRef.current = 'AWAITING_AIRCRAFT'; // Force immediate ref update for the async capture
+                            setAtcStage('AWAITING_AIRCRAFT');
+                        } else {
+                            // STANDARD FLOW: Pilot only said "ATC"
+                            // ATC Response
+                            const response = "Station calling, identify your aircraft.";
+                            addLog('ATC', response);
+                            speakText(response);
+
+                            // Transition to Stage 2
+                            setAtcStage('AWAITING_AIRCRAFT');
+                        }
+                    } else {
+                        // console.log("Ignored (No Wake Word):", cleanTranscript);
+                    }
+                }
+                // STAGE 2: AWAITING_AIRCRAFT - Listening for Plane Type
+                else if (atcStageRef.current === 'AWAITING_AIRCRAFT') {
+                    addLog('PILOT', cleanTranscript);
+
+                    // Set context as the aircraft
+                    pilotContextRef.current = cleanTranscript;
+                    setPilotContext(cleanTranscript);
+
+                    // Trigger Analysis
+                    videoFeedRef.current?.captureNow();
+
+                    // Transition is handled in handleFrameCapture after success
+                    // But we can optimistically set it or wait. 
+                    // Let's wait for the AI to speak "Report destination", getting effectively handled in handleFrameCapture.
+                    // Actually, to prevent double triggering, let's keep it here but we don't know the next state until we are doing.
+                    // For now, let's leave it to handleFrameCapture to switch states, OR switch to a temporary "PROCESSING" state?
+                    // Safe approach: The user speaks -> System Processes -> System Speaks -> System waits for next input.
+                }
+                // STAGE 3: AWAITING_DESTINATION - Listening for Flight Info
+                else if (atcStageRef.current === 'AWAITING_DESTINATION') {
+                    addLog('PILOT', cleanTranscript);
+
+                    pilotContextRef.current = "Destination/Flight Info: " + cleanTranscript;
+                    setPilotContext(cleanTranscript);
+
+                    // Trigger Analysis (this effectively acknowledges the destination)
+                    videoFeedRef.current?.captureNow();
+
+                    // Reset to IDLE after this (as per current requirement, end of flow)
+                    // Or we could go back to IDLE in handleFrameCapture
+                }
+            },
+            (errorMsg) => {
+                console.error(errorMsg);
+                if (errorMsg.includes('not-allowed')) {
+                    addLog('SYSTEM', 'CRITICAL: MIC PERMISSION DENIED.');
+                }
             }
-        });
+        );
 
         return () => {
             recognizerRef.current?.stop();
@@ -129,16 +228,22 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
 
     // AI Loop
     const handleFrameCapture = async (base64Image: string) => {
-        if (isProcessing) return;
+        if (isProcessingRef.current) return;
 
         setIsProcessing(true);
+        isProcessingRef.current = true;
+
+        // Use ref value to avoid race conditions with state
+        const currentContext = pilotContextRef.current;
+
         try {
-            const resp = await analyzeFlightFrame(base64Image, pilotContext, apiKey);
+            const resp = await analyzeFlightFrame(base64Image, currentContext, apiKey);
             const cleanResp = processAIResponse(resp);
 
-            if (pilotContext) {
+            if (currentContext) {
                 addLog('ATC', cleanResp);
                 speakText(cleanResp);
+                pilotContextRef.current = '';
                 setPilotContext('');
             } else {
                 if (cleanResp.includes("URGENT") || cleanResp.includes("ALERT")) {
@@ -151,6 +256,28 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
             console.error("AI Error:", error);
         } finally {
             setIsProcessing(false);
+            isProcessingRef.current = false;
+
+            // State Transitions Post-Analysis
+            if (atcStageRef.current === 'AWAITING_AIRCRAFT') {
+                setAtcStage('AWAITING_DESTINATION');
+            } else if (atcStageRef.current === 'AWAITING_DESTINATION') {
+                setAtcStage('IDLE');
+            }
+        }
+    };
+
+    const handlePilotInput = (text: string) => {
+        addLog('PILOT', text);
+        pilotContextRef.current = text;
+        setPilotContext(text);
+        // Trigger immediate analysis if video feed is active
+        if (connectionState === ConnectionState.CONNECTED) {
+            videoFeedRef.current?.captureNow();
+        } else {
+            // Fallback if no video feed (optional: maybe just text chat?)
+            // For now we assume video is required for context
+            addLog('SYSTEM', 'Link radar to start transmission.');
         }
     };
 
@@ -178,11 +305,23 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
                                     value={callsign}
                                     onChange={(e) => setCallsign(e.target.value)}
                                     className="w-full bg-black/50 border border-gray-700 rounded p-3 text-white focus:border-aviation-500 outline-none"
+                                    placeholder="e.g. SKY-123"
                                 />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 mb-1">AI API KEY (DIRECT)</label>
+                                <input
+                                    type="password"
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                    className="w-full bg-black/50 border border-gray-700 rounded p-3 text-white focus:border-aviation-500 outline-none"
+                                    placeholder="Enter Google or DeepSeek Key"
+                                />
+                                <p className="text-[10px] text-gray-600 mt-1">Supports Google (AIza...), DeepSeek (sk-...), and GitHub Models (ghp_...).</p>
                             </div>
                             <button
                                 onClick={handleSaveConfig}
-                                disabled={!callsign}
+                                disabled={!callsign || !apiKey}
                                 className="w-full bg-aviation-500 hover:bg-aviation-600 text-white font-bold py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 SAVE & CONNECT
@@ -231,6 +370,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
                     {/* Radar Feed */}
                     <div className="flex-1 bg-aviation-900/50 rounded-2xl border border-aviation-800 relative overflow-hidden group">
                         <VideoFeed
+                            ref={videoFeedRef}
                             stream={stream}
                             onFrameCapture={handleFrameCapture}
                             interval={5000}
@@ -254,11 +394,21 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
                                 <span className="text-[10px] font-mono text-aviation-400">ANALYZING LINK</span>
                             </div>
                         )}
+
+                        {/* Live Speech Transcript Overlay */}
+                        {interimText && (
+                            <div className="absolute bottom-4 left-4 right-4 text-center">
+                                <span className="inline-block bg-black/70 backdrop-blur px-4 py-2 rounded-lg border border-aviation-500/50 text-aviation-100 font-mono text-lg shadow-lg">
+                                    <span className="text-aviation-500 mr-2 text-xs uppercase tracking-widest">Transmitting</span>
+                                    "{interimText}"
+                                </span>
+                            </div>
+                        )}
                     </div>
 
                     {/* Logs */}
                     <div className="h-1/3">
-                        <LogTerminal logs={logs} />
+                        <LogTerminal logs={logs} onSendRequest={handlePilotInput} />
                     </div>
                 </div>
 

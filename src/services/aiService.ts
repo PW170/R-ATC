@@ -1,7 +1,6 @@
 import OpenAI from "openai";
 
 // AI API Configuration
-// AI API Configuration
 const DEFAULT_MODEL = "gemini-1.5-flash";
 const CHUTES_MODEL = "Qwen/Qwen3-32B";
 
@@ -9,26 +8,36 @@ const SYSTEM_INSTRUCTION = `
 Role: You are R-ATC, an expert Air Traffic Controller for Roblox flight simulators (PTFS/Aeronautica).
 Status: Active Tower Controller.
 
-[CRITICAL MISSION]
-1. A pilot has just identified their aircraft.
-2. You MUST analyze the screen to extract:
-   - SPEED (in Knots)
-   - THRUST (in %)
-   - ALTITUDE (in ft)
-3. You MUST then ask the pilot for:
-   - DESTINATION
-   - FLIGHT CODE
+[VISUAL HUD DATA LOCATIONS - SCAN CAREFULLY]
+The pilot's screen has a dark dashboard theme. Extract numbers from these specific areas:
+1. BOTTOM-LEFT: Look for "SPEED:". The value is next to it (e.g., "0 kts", "264 kts").
+2. BOTTOM-RIGHT: Look for "ALTITUDE:". The value is next to it (e.g., "500 ft", "2526 ft").
+3. MID-LEFT (Above Speed): Two circular gauges "ENG 1" and "ENG 2". Extract the % values (e.g., "100%", "Idle"). Use the average as THRUST.
+4. CENTER/HORIZON: Look for floating white text labels indicating airports and distances (e.g., "Doha Hamad Airport", "Distance: 34357 studs").
+
+[CRITICAL RULE: NO GUESSING]
+- If a value is partially covered or blurry, say "Instruments unreadable".
+- NEVER default to "0 kts" or "500 ft" unless you clearly see those digits.
+- NEVER fabricate a destination or flight code.
+
+[HEADING VERIFICATION]
+- If the pilot states a destination, check the CENTER/HORIZON for a matching airport label.
+- If the label matches, confirm: "On course for [Airport]."
+- If the label shows a DIFFERENT airport directly ahead, warn: "Caution. You appear to be aligned for [Visual Airport], check heading."
 
 [RESPONSE FORMAT]
-"Copy [Aircraft Type]. Radar Checks: Speed [X] knots, Thrust [Y]%, Altitude [Z] ft. Report your destination and flight code."
+"Copy [Aircraft Type]. Radar Checks: Speed [X] knots, Thrust [Y]%, Altitude [Z] ft. [Heading Verification Confirmation/Warning]. Report your destination and flight code."
 
 [TELEMETRY TAG]
-Append this exact tag at the end for the HUD:
+Append this exact tag at the end:
 [TELEM: ALT=[number] SPD=[number]]
-(If instruments are unreadable, use ---)
+(If unreadable, use ---)
 
 [TONE]
-Professional, radio-quality, concise. Do NOT hallucinate. If you can't see the instruments, say "Instruments unreadable, report altitude and speed."
+Radio-quality ATC. Concise. Strict adherence to visual evidence.
+
+[LANGUAGE]
+ENGLISH ONLY.
 `;
 
 export const analyzeFlightFrame = async (
@@ -42,13 +51,21 @@ export const analyzeFlightFrame = async (
             return "System failure. API configuration error.";
         }
 
-        const promptText = `Pilot reports aircraft: "${pilotContext}". Analyze the dashboard instruments now. Identify Speed, Thrust, and Altitude. Ask for destination and flight code.`;
+        const promptText = `Step 1: Locate the SPEED (bottom-left), THRUST (mid-left gauges), and ALTITUDE (bottom-right).
+Step 2: Scan the HORIZON for floating airport names and distances.
+Step 3: Compare visible airport labels with pilot's intent: "${pilotContext}".
+Step 4: Respond to pilot with radar check and heading verification (Right/Wrong direction).
+If digits are unreadable, report "Instruments unreadable".`;
 
         let baseURL = "https://generativelanguage.googleapis.com/v1beta/openai/";
         let currentModel = DEFAULT_MODEL;
 
         // Route based on API Key
-        if (apiKey.startsWith("cpk_")) {
+        if (import.meta.env.VITE_AI_BASE_URL) {
+            console.log("Routing to Custom AI Provider (Env Configured)");
+            baseURL = import.meta.env.VITE_AI_BASE_URL;
+            currentModel = import.meta.env.VITE_AI_MODEL || currentModel;
+        } else if (apiKey.startsWith("cpk_")) {
             console.log("Routing to Chutes AI");
             baseURL = "https://llm.chutes.ai/v1";
             currentModel = CHUTES_MODEL;
@@ -83,31 +100,46 @@ export const analyzeFlightFrame = async (
 
         console.log(`Sending transmission to model: ${currentModel} at ${baseURL}`);
 
+        const isVisionSupported = !currentModel.includes('deepseek') && !currentModel.includes('o1-');
+
+        let finalPrompt = promptText;
+        let messages: any[] = [
+            {
+                role: "system",
+                content: SYSTEM_INSTRUCTION
+            }
+        ];
+
+        if (!isVisionSupported) {
+            console.log("Vision not supported for this model. Sending text only.");
+            finalPrompt += " [SYSTEM WARNING: VISION OFFLINE. IMAGE DATA NOT AVAILABLE. You cannot see the dashboard. Ask the pilot for readings.]";
+            messages.push({
+                role: "user",
+                content: finalPrompt
+            });
+        } else {
+            messages.push({
+                role: "user",
+                content: [
+                    {
+                        type: "text",
+                        text: promptText,
+                    },
+                    {
+                        type: "image_url",
+                        image_url: {
+                            url: `data:image/png;base64,${base64Image}`
+                        }
+                    }
+                ]
+            });
+        }
+
         const response = await openai.chat.completions.create({
             model: currentModel,
-            messages: [
-                {
-                    role: "system",
-                    content: SYSTEM_INSTRUCTION
-                },
-                {
-                    role: "user",
-                    content: [
-                        {
-                            type: "text",
-                            text: promptText,
-                        } as any,
-                        {
-                            type: "image_url",
-                            image_url: {
-                                url: `data:image/jpeg;base64,${base64Image}`
-                            }
-                        } as any
-                    ]
-                }
-            ],
+            messages: messages,
             max_tokens: 150,
-            temperature: 0.7,
+            temperature: 0.2,
         });
 
         const content = response.choices?.[0]?.message?.content;

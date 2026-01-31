@@ -25,10 +25,12 @@ const App: React.FC = () => {
     // Listen for changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
-      if (session?.user) {
+      if (session?.user && stage === 'auth') {
+        // Only auto-redirect to dashboard when coming from auth page
         setStage('dashboard');
-      } else if (stage === 'dashboard') { // Only redirect if we were in dashboard
-        // Optional: Stay on landing if not logged in
+      } else if (!session?.user && stage === 'dashboard') {
+        // Redirect to landing if logged out while on dashboard
+        setStage('landing');
       }
     });
 
