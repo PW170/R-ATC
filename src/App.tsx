@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import LandingPage from './components/LandingPage';
 import AuthPage from './components/AuthPage';
 import Dashboard from './components/Dashboard';
+import PricingPage from './components/PricingPage';
 import { supabase } from './services/supabaseClient';
 import { User } from '@supabase/supabase-js';
 
-type AppStage = 'landing' | 'auth' | 'dashboard';
+type AppStage = 'landing' | 'auth' | 'dashboard' | 'pricing';
 
 const App: React.FC = () => {
   const [stage, setStage] = useState<AppStage>('landing');
@@ -48,13 +49,32 @@ const App: React.FC = () => {
     setStage('landing');
   };
 
+  const handlePricing = () => {
+    setStage('pricing');
+  };
+
+  const handleLogin = () => {
+    setStage('auth');
+  }
+
   // Simple spinner while checking auth
   if (loading) return <div className="min-h-screen bg-black flex items-center justify-center text-aviation-500 font-mono">INITIALIZING...</div>;
 
   return (
     <>
       {stage === 'landing' && (
-        <LandingPage onGetStarted={() => setStage(user ? 'dashboard' : 'auth')} />
+        <LandingPage
+          onGetStarted={() => setStage(user ? 'dashboard' : 'auth')}
+          onLogin={handleLogin}
+          onPricing={handlePricing}
+        />
+      )}
+
+      {stage === 'pricing' && (
+        <PricingPage
+          onLogin={handleLogin}
+          onHome={handleHome}
+        />
       )}
 
       {stage === 'auth' && (

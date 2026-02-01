@@ -15,18 +15,15 @@ The pilot's screen has a dark dashboard theme. Extract numbers from these specif
 3. MID-LEFT (Above Speed): Two circular gauges "ENG 1" and "ENG 2". Extract the % values (e.g., "100%", "Idle"). Use the average as THRUST.
 4. CENTER/HORIZON: Look for floating white text labels indicating airports and distances (e.g., "Doha Hamad Airport", "Distance: 34357 studs").
 
-[CRITICAL RULE: NO GUESSING]
-- If a value is partially covered or blurry, say "Instruments unreadable".
-- NEVER default to "0 kts" or "500 ft" unless you clearly see those digits.
-- NEVER fabricate a destination or flight code.
-
-[HEADING VERIFICATION]
-- If the pilot states a destination, check the CENTER/HORIZON for a matching airport label.
-- If the label matches, confirm: "On course for [Airport]."
-- If the label shows a DIFFERENT airport directly ahead, warn: "Caution. You appear to be aligned for [Visual Airport], check heading."
+[RUNWAY CLEARANCE VERIFICATION]
+- Use this ONLY if the pilot asks "Am I cleared on land" or "Am I cleared to takeoff".
+- Scan the CENTER/HORIZON for the runway surface.
+- If the runway is visible and NO aircraft/obstacles are seen on it: "Runway is clear. [Clearance Response]".
+- If other aircraft are on the runway: "Negative. Runway occupied by traffic. Hold position."
+- If the runway is not in sight: "Runway not in sight. Say again position."
 
 [RESPONSE FORMAT]
-"Copy [Aircraft Type]. Radar Checks: Speed [X] knots, Thrust [Y]%, Altitude [Z] ft. [Heading Verification Confirmation/Warning]. Report your destination and flight code."
+"Copy [Aircraft Type]. Radar Checks: Speed [X] knots, Thrust [Y]%, Altitude [Z] ft. [Heading Verification Confirmation/Warning]. [Runway Clearance Verification if applicable]. Report your destination and flight code."
 
 [TELEMETRY TAG]
 Append this exact tag at the end:
@@ -51,10 +48,18 @@ export const analyzeFlightFrame = async (
             return "System failure. API configuration error.";
         }
 
-        const promptText = `Step 1: Locate the SPEED (bottom-left), THRUST (mid-left gauges), and ALTITUDE (bottom-right).
+        const isClearanceRequest = pilotContext.toLowerCase().includes("cleared on land") ||
+            pilotContext.toLowerCase().includes("cleared to takeoff");
+
+        let promptText = `Step 1: Locate the SPEED (bottom-left), THRUST (mid-left gauges), and ALTITUDE (bottom-right).
 Step 2: Scan the HORIZON for floating airport names and distances.
-Step 3: Compare visible airport labels with pilot's intent: "${pilotContext}".
-Step 4: Respond to pilot with radar check and heading verification (Right/Wrong direction).
+Step 3: Compare visible airport labels with pilot's intent: "${pilotContext}".`;
+
+        if (isClearanceRequest) {
+            promptText += `\nStep 4: [PRIORITY] Pilot is requesting clearance: "${pilotContext}". Visually inspect the center area for the runway. Determine if any other aircraft or obstacles are on the runway surface. Verify if the runway is clear for the requested operation.`;
+        }
+
+        promptText += `\nStep 5: Respond to pilot with radar check, heading verification, and runway clearance status if requested.
 If digits are unreadable, report "Instruments unreadable".`;
 
         let baseURL = "https://generativelanguage.googleapis.com/v1beta/openai/";
