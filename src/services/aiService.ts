@@ -65,30 +65,34 @@ If digits are unreadable, report "Instruments unreadable".`;
         let baseURL = "https://generativelanguage.googleapis.com/v1beta/openai/";
         let currentModel = DEFAULT_MODEL;
 
-        // Route based on API Key
-        if (import.meta.env.VITE_AI_BASE_URL) {
-            console.log("Routing to Custom AI Provider (Env Configured)");
-            baseURL = import.meta.env.VITE_AI_BASE_URL;
-            currentModel = import.meta.env.VITE_AI_MODEL || currentModel;
+        // Route based on API Key prefix (Highest Priority)
+        if (apiKey.startsWith("sk-or-")) {
+            console.log("AI Service: Routing to OpenRouter (Detected from Key)");
+            baseURL = "https://openrouter.ai/api/v1";
+            currentModel = import.meta.env.VITE_AI_MODEL || "google/gemini-2.0-flash-001";
         } else if (apiKey.startsWith("cpk_")) {
-            console.log("Routing to Chutes AI");
+            console.log("AI Service: Routing to Chutes AI");
             baseURL = "https://llm.chutes.ai/v1";
             currentModel = CHUTES_MODEL;
         } else if (apiKey.startsWith("ghp_") || apiKey.startsWith("github_pat_")) {
-            console.log("Routing to GitHub Models (OpenAI-Compatible endpoint)");
+            console.log("AI Service: Routing to GitHub Models");
             baseURL = "https://models.inference.ai.azure.com";
-            // DeepSeek-R1 does not support vision, so we use gpt-4o for this mission
             currentModel = "gpt-4o";
         } else if (apiKey.startsWith("AIza")) {
-            console.log("Routing to Google Direct API");
+            console.log("AI Service: Routing to Google Direct API");
             baseURL = "https://generativelanguage.googleapis.com/v1beta/openai/";
             currentModel = "gemini-1.5-flash";
-        } else if (apiKey.startsWith("sk-")) {
-            console.log("Routing to DeepSeek Direct API");
+        } else if (apiKey.startsWith("sk-") && !apiKey.includes("or-")) {
+            console.log("AI Service: Routing to DeepSeek Direct API");
             baseURL = "https://api.deepseek.com";
             currentModel = "deepseek-chat";
+        } else if (import.meta.env.VITE_AI_BASE_URL) {
+            // Fallback to Env-configured Base URL if key is generic or unknown
+            console.log("AI Service: Routing to Custom Provider (Env Configured)");
+            baseURL = import.meta.env.VITE_AI_BASE_URL;
+            currentModel = import.meta.env.VITE_AI_MODEL || currentModel;
         } else {
-            console.log("Routing to Generic OpenAI API");
+            console.log("AI Service: Routing to Generic OpenAI API");
             baseURL = "https://api.openai.com/v1";
             currentModel = "gpt-4o-mini";
         }
@@ -98,14 +102,13 @@ If digits are unreadable, report "Instruments unreadable".`;
             baseURL: baseURL,
             dangerouslyAllowBrowser: true,
             defaultHeaders: {
-                "HTTP-Referer": typeof window !== 'undefined' ? window.location.origin : '',
-                "X-Title": "R-ATC",
+                "X-Title": "SkyCommand AI-ATC",
             }
         });
 
         console.log(`Sending transmission to model: ${currentModel} at ${baseURL}`);
 
-        const isVisionSupported = !currentModel.includes('deepseek') && !currentModel.includes('o1-');
+        const isVisionSupported = !currentModel.includes('deepseek') && !currentModel.includes('o1-') || (apiKey.startsWith("sk-or-") && (currentModel.includes('flash') || currentModel.includes('vision') || currentModel.includes('pro')));
 
         let finalPrompt = promptText;
         let messages: any[] = [

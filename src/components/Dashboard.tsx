@@ -56,10 +56,16 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
     // Save Config
     const handleSaveConfig = () => {
         if (callsign) {
-            localStorage.setItem('ratc_callsign', callsign);
             localStorage.setItem('ratc_api_key', apiKey);
+            localStorage.setItem('ratc_callsign', callsign);
             setShowSettings(false);
         }
+    };
+
+    const handleResetConfig = () => {
+        const defaultKey = import.meta.env.VITE_AI_API_KEY || '';
+        setApiKey(defaultKey);
+        localStorage.removeItem('ratc_api_key');
     };
 
 
@@ -309,23 +315,49 @@ const Dashboard: React.FC<DashboardProps> = ({ user, onLogout, onHome }) => {
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-gray-500 mb-1">AI API KEY (DIRECT)</label>
+                                <label className="block text-xs font-bold text-gray-500 mb-1 flex justify-between">
+                                    <span>AI API KEY (DIRECT)</span>
+                                    {apiKey && <span className="text-aviation-400 opacity-50 font-mono">****{apiKey.slice(-4)}</span>}
+                                </label>
                                 <input
                                     type="password"
                                     value={apiKey}
                                     onChange={(e) => setApiKey(e.target.value)}
-                                    className="w-full bg-black/50 border border-gray-700 rounded p-3 text-white focus:border-aviation-500 outline-none"
+                                    className={`w-full bg-black/50 border border-gray-700 rounded p-3 text-white focus:border-aviation-500 outline-none ${apiKey !== (import.meta.env.VITE_AI_API_KEY || '') ? 'border-amber-500/50' : ''}`}
                                     placeholder="Enter Google or DeepSeek Key"
                                 />
-                                <p className="text-[10px] text-gray-600 mt-1">Supports Google (AIza...), DeepSeek (sk-...), and GitHub Models (ghp_...).</p>
+                                <div className="mt-1 flex flex-col gap-1">
+                                    <p className="text-[10px] text-gray-400 font-medium">
+                                        {apiKey.startsWith('sk-or-') ? '✓ OpenRouter (Vision)' :
+                                            apiKey.startsWith('AIza') ? '✓ Google Gemini' :
+                                                apiKey.startsWith('sk-') ? '✓ DeepSeek' :
+                                                    apiKey.startsWith('ghp_') ? '✓ GitHub Models' :
+                                                        'Supports Google, DeepSeek, OpenRouter, and GitHub.'}
+                                    </p>
+                                    {apiKey !== (import.meta.env.VITE_AI_API_KEY || '') && (
+                                        <p className="text-[9px] text-amber-500 italic">
+                                            ⚠️ Custom key active (Overrides .env configuration)
+                                        </p>
+                                    )}
+                                </div>
                             </div>
-                            <button
-                                onClick={handleSaveConfig}
-                                disabled={!callsign || !apiKey}
-                                className="w-full bg-aviation-500 hover:bg-aviation-600 text-white font-bold py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                SAVE & CONNECT
-                            </button>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={handleSaveConfig}
+                                    disabled={!callsign || !apiKey}
+                                    className="flex-1 bg-aviation-500 hover:bg-aviation-600 text-white font-bold py-3 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    SAVE & CONNECT
+                                </button>
+                                <button
+                                    onClick={handleResetConfig}
+                                    className="px-4 bg-gray-800 hover:bg-gray-700 text-gray-400 py-3 rounded-lg transition-colors flex items-center gap-1 group"
+                                    title="Reset to .env defaults"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 group-hover:rotate-180 transition-transform duration-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                                    RESET
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
